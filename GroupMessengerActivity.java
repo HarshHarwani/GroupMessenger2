@@ -11,15 +11,11 @@ import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.Menu;
 import android.view.View;
-import android.view.ViewDebug;
 import android.widget.EditText;
 import android.widget.TextView;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.io.PrintStream;
 import java.io.Serializable;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -28,8 +24,6 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Queue;
@@ -127,9 +121,7 @@ public class GroupMessengerActivity extends Activity {
             ObjectOutputStream oos=null;
             ServerSocket serverSocket = sockets[0];
             Socket client=null;
-            BufferedReader in=null;
             MessageObject messageObject=null;
-            float maxCount=0f;
             while(true) {
                 try {
                     client = serverSocket.accept();
@@ -152,10 +144,11 @@ public class GroupMessengerActivity extends Activity {
                             messageObject = (MessageObject) ois.readObject();
 
                             //In case of agreedMuticast we are replacing the proposed value with the agreed value and then checking the queue for any deliverable message
+
                             if(messageObject.agreedmulticastFlag)
                             {
+                                Log.d(TAG, "Inside agreedmulticastFlag flag true");
                                 HoldBackQueueObject holdobj=null;
-                                HoldBackQueueObject finalobj=null,finalObjToBeDelivered=null;
                                 String id=messageObject.messageId;
                                 float agreed=messageObject.agreedSeqNo;
                                 Iterator itr=holdBackQueue.iterator();
@@ -169,19 +162,21 @@ public class GroupMessengerActivity extends Activity {
                                 holdBackQueue.add(new HoldBackQueueObject(id,agreed,true));
                                 while(itr.hasNext())
                                 {
-                                    finalobj= (HoldBackQueueObject) itr.next();
-                                    if(finalobj.isDeliverable)
+                                    holdobj= (HoldBackQueueObject) itr.next();
+                                    if(holdobj.isDeliverable)
                                     {
-                                        finalObjToBeDelivered=holdBackQueue.poll();
-                                        String msgId=finalObjToBeDelivered.messageId;
+                                        holdobj=holdBackQueue.poll();
+                                        String msgId=holdobj.messageId;
                                         String msg=inputMessageMap.get(msgId);
                                         onProgressUpdate(msg);
                                     }
                                 }
 
                             }
-                            //In case of First stage multicast when
+                            //In case of First stage multicast when we get the first message
                             if (messageObject != null && messageObject.basicMulticastFlag) {
+
+
                                 //messageId of the form 11108.0(PortNo.sequence)
                                 String messageId = messageObject.messageId;
                                 String portNo = messageObject.sender;
@@ -196,8 +191,10 @@ public class GroupMessengerActivity extends Activity {
                                 }
                                 if (socket.isConnected()) {
                                     oos = new ObjectOutputStream(socket.getOutputStream());
+                                    //setting unicastflag true and giving proposedSeqNo
                                     MessageObject messageObjectUnicast=new MessageObject(true,proposedSeqNo);
-                                    Log.d(TAG, "Client process started");
+                                    Log.d(TAG,"Proposed sequence no-->"+ String.valueOf(proposedSeqNo));
+                                    Log.d(TAG, "Inside basicMulticastFlag flag true");
                                     oos.writeObject(messageObjectUnicast);
                                 }
                                 oos.close();
@@ -212,6 +209,8 @@ public class GroupMessengerActivity extends Activity {
                                 //adding the holdback object in the holdbackqueue
                                 holdBackQueue.add(new HoldBackQueueObject(messageId,proposedNoInQueue,false));
                                 proposedSeqNo++;
+
+
                                 //adding propsedNoinQueue to the proposed list
                                 if(messageObject.unicastFlag) {
                                     ArrayList<Float> proposedSeqNoList = proposedSeqNoMap.get(messageId);
@@ -227,7 +226,7 @@ public class GroupMessengerActivity extends Activity {
                                         for (String s : portNumbers) {
                                             Socket clientsocket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(s));
                                             if (clientsocket.isConnected()) {
-                                                Log.d(TAG, "Client process started");
+                                                Log.d(TAG, "Inside unicast flag true");
                                                 MessageObject messageObjectMulticast = new MessageObject(messageId, max, true);
                                                 oos = new ObjectOutputStream(socket.getOutputStream());
                                                 oos.writeObject(messageObjectMulticast);
@@ -236,6 +235,9 @@ public class GroupMessengerActivity extends Activity {
                                         }
                                     }
                                 }
+
+
+
                             }
                         } catch (ClassNotFoundException e) {
                             e.printStackTrace();
@@ -244,17 +246,6 @@ public class GroupMessengerActivity extends Activity {
                         Log.e(TAG, "Exception occurred in creating Inputstream");
                         e.printStackTrace();
                     }
-                }
-                if (messageObject != null) {
-                    try {
-
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        Log.e(TAG,"Exception occurred in reading Inputstream");
-                    }
-
-                    /*Log.d(TAG, strings);
-                    publishProgress(strings);*/
                 }
             }
         }
