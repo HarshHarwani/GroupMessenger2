@@ -13,9 +13,13 @@ import android.view.Menu;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
+
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.PrintStream;
 import java.io.Serializable;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -24,9 +28,11 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Queue;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * GroupMessengerActivity is the main Activity for the assignment.
@@ -47,6 +53,10 @@ public class GroupMessengerActivity extends Activity {
     public static Map<String,ArrayList<Float>> proposedSeqNoMap=new HashMap<String,ArrayList<Float>>();
     public static int proposedSeqNo=0;
     public static int deliverySeqNo=0;
+    public static int agreedmax=0;
+    public static int proposedmax=0;
+    public static List<Float> MaxProposalList=new ArrayList<Float>();
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -119,8 +129,17 @@ public class GroupMessengerActivity extends Activity {
             ObjectOutputStream oos=null;
             ServerSocket serverSocket = sockets[0];
             Socket client=null;
-            MessageObject messageObject=null;
+            //MessageObject messageObject=null;
+            BufferedReader in=null;
+            String id=null;
+            String messageValue=null;
+            String sender=null;
+            String portNo=null;
+            String agreed=null;
             float max = 0.0f;
+            float maxinList=0.0f;
+            float proposedNoInQueue=0.0f;
+            int maxIntPart=0;
             while(true) {
                 try {
                     client = serverSocket.accept();
@@ -135,68 +154,92 @@ public class GroupMessengerActivity extends Activity {
                 //Second mode for getting the agreement
                 //Third mode for actually delivering the message in the content provider using the holdback Queue
                     try {
-                        ObjectInputStream ois = new ObjectInputStream(client.getInputStream());
+                        in = new BufferedReader(
+                                new InputStreamReader(client.getInputStream()));
+                        String messageData=in.readLine();
+                        String[] inputs=messageData.split("%");
+                        if(messageData.contains("basicMultiCast"))
+                        {
+                            id=inputs[0];
+                            messageValue=inputs[1];
+                            sender=inputs[2];
+                            portNo=inputs[3];
+                        }
+                        if(messageData.contains("UniCast"))
+                        {
+                            id=inputs[0];
+                            proposedNoInQueue=Float.valueOf(inputs[1]);
+                            sender=inputs[2];
+                            messageValue=inputs[3];
+                        }
+                        if(messageData.contains("AgreedMulticast"))
+                        {
+                            id=inputs[0];
+                            max=Float.valueOf(inputs[1]);
+                            messageValue=inputs[2];
+                            maxIntPart=Integer.parseInt(inputs[1].substring(0,inputs[1].indexOf('.')));
+                        }
+                        // ObjectInputStream ois = new ObjectInputStream(client.getInputStream());
                         try {
-                            messageObject = (MessageObject) ois.readObject();
-                            if(messageObject.portNo!=null)
+                           // messageObject = (MessageObject) ois.readObject();
+
+                            /*if(messageObject.portNo!=null)
                                 Log.d("Port no-->",messageObject.portNo);
-                            Log.d("Message id-->",messageObject.messageId);
+                            Log.d("Message id-->",messageObject.messageId);*/
                             //In case of agreedMuticast we are replacing the proposed value with the agreed value and then checking the queue for any deliverable message
 
-                            if(messageObject.agreedmulticastFlag)
-                            {
+                            if(messageData.contains("AgreedMulticast")) {
+
                                 Log.d(TAG, "Inside agreedmulticastFlag");
-                                HoldBackQueueObject holdobj=null,holdobj1=null,holdobj2=null;
-                                String id=messageObject.messageId;
-                                String msg=messageObject.messageValue;
-                                float agreed=messageObject.agreedSeqNo;
-                                Iterator itr=holdBackQueue.iterator();
-                                while(itr.hasNext())
-                                {
-                                    holdobj= (HoldBackQueueObject) itr.next();
-                                    if(id.equals(holdobj.messageId))
+                                HoldBackQueueObject holdobj = null, holdobj1 = null, holdobj2 = null;
+                                Iterator itr = holdBackQueue.iterator();
+                                while (itr.hasNext()) {
+                                    holdobj = (HoldBackQueueObject) itr.next();
+                                    if (id.equals(holdobj.messageId))
                                         break;
                                 }
-                                holdBackQueue.remove(holdobj);
-                                holdBackQueue.add(new HoldBackQueueObject(id,msg,agreed,true));
-                                while(true) {
-                                    holdobj1 = holdBackQueue.peek();
-                                    if (holdobj1 != null) {
-                                        boolean flag = holdobj1.isDeliverable;
-                                        if (flag) {
-                                            holdobj2 = holdBackQueue.poll();
-                                            String msgId = holdobj2.messageId;
-                                            String finalMessage = holdobj2.messageValue;
-                                           // publishProgress(finalMessage);
-                                            ContentValues values = new ContentValues();
-                                            values.put(KEY_FIELD, String.valueOf(deliverySeqNo));
-                                            values.put(VALUE_FIELD, finalMessage);
-                                            deliverySeqNo=deliverySeqNo+1;
-                                            new GroupMessengerProvider().insert(mUri,values);
+                                synchronized (this) {
+                                    if(maxIntPart>agreedmax) {
+                                        agreedmax = maxIntPart;
+                                    }
+                                    holdBackQueue.remove(holdobj);
+                                    holdBackQueue.add(new HoldBackQueueObject(id, messageValue, max, true));
+
+                                    Log.d("AgreedMax-->", String.valueOf(agreedmax));
+                                    Log.d("Queue value In agreed stage-->", HoldBackQueueObject.toString(holdBackQueue));
+                                    while (true) {
+                                        holdobj1 = holdBackQueue.peek();
+                                        if (holdobj1 != null) {
+                                            boolean flag = holdobj1.isDeliverable;
+                                            if (flag) {
+                                                holdobj2 = holdBackQueue.poll();
+                                                String msgId = holdobj2.messageId;
+                                                String finalMessage = holdobj2.messageValue;
+                                                publishProgress(finalMessage);
+                                            } else {
+                                                break;
+                                            }
                                         } else {
                                             break;
                                         }
                                     }
-                                    else
-                                    {
-                                        break;
-                                    }
                                 }
-
                             }
                             //In case of First stage multicast when we get the first message
-                            if (messageObject != null && messageObject.basicMulticastFlag) {
+                            if(messageData.contains("basicMultiCast")) {
                                 //messageId of the form 11108.0(PortNo.sequence)
-                                String messageId = messageObject.messageId;
-                                String messageValue=messageObject.messageValue;
-                                String sender = messageObject.sender;
-                                String portNo=messageObject.portNo;
                                 //proposedNoinQueue(0.11108)
-                                float proposedNoInQueue = Float.valueOf(proposedSeqNo + "." + portNo);
-                                Log.d("proposedNoInQueue-->",String.valueOf(proposedNoInQueue));
+                               // float proposedNoInQueueInBasic = Float.valueOf(proposedSeqNo + "." + portNo);
+                               // Log.d("proposedNoInQueue-->",String.valueOf(proposedNoInQueue));
                                 Log.d(TAG, "After adding the object in holdbackqueue");
-                                holdBackQueue.add(new HoldBackQueueObject(messageId,messageValue,proposedNoInQueue,false));
-                                MessageObject messageObjectUnicast=new MessageObject(true,false,false,messageId,proposedNoInQueue,sender,messageValue);
+                               // float maxProposedValueInQueue=HoldBackQueueObject.getMax(holdBackQueue);
+                                proposedmax=Math.max(proposedmax,agreedmax)+1;
+                                Log.d("proposedValue", String.valueOf(proposedmax));
+                                float proposedNoInQueueInBasic = Float.valueOf(proposedmax + "." + portNo);
+                                holdBackQueue.add(new HoldBackQueueObject(id,messageValue,proposedNoInQueueInBasic,false));
+                                Log.d("Queue value  in first stage-->",HoldBackQueueObject.toString(holdBackQueue));
+                                String messageDataUnicast=id+"%"+String.valueOf(proposedNoInQueueInBasic)+"%"+sender+"%"+messageValue+"%"+"UniCast";
+                               // MessageObject messageObjectUnicast=new MessageObject(true,false,false,id,proposedNoInQueue,sender,messageValue);
                                 proposedSeqNo=proposedSeqNo+1;
                                 Socket socket = null;
                                 try {
@@ -205,54 +248,52 @@ public class GroupMessengerActivity extends Activity {
                                     e.printStackTrace();
                                 }
                                     try {
-                                        oos = new ObjectOutputStream(socket.getOutputStream());
-
-                                    } catch (IOException e1) {
+                                        PrintStream ps = new PrintStream
+                                                (socket.getOutputStream());
+                                        ps.println(messageDataUnicast);
+                                        ps.flush();
+                                        ps.close();
+                                        socket.close();
+                                          }
+                                    catch (IOException e1) {
                                         e1.printStackTrace();
                                     }
                                     Log.d(TAG,"Proposed sequence no-->"+ String.valueOf(proposedSeqNo));
                                     Log.d(TAG, "Inside ClientTaskUniTask");
-                                    try {
-                                        oos.writeObject(messageObjectUnicast);
-                                        oos.close();
-                                        socket.close();
-                                    } catch (IOException e1) {
-                                        e1.printStackTrace();
-                                    }
-
                               //  new ClientTaskUniTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,messageObjectUnicast);
                             }
-                            if(messageObject != null && messageObject.unicastFlag) {
-                                String messageId = messageObject.messageId;
-                                float proposedNoInQueue = messageObject.proposedSeqNo;
-                                String msg = messageObject.messageValue;
-                                ArrayList<Float> proposedSeqNoList = proposedSeqNoMap.get(messageId);
+                            if(messageData.contains("UniCast")) {
+                                ArrayList<Float> proposedSeqNoList = proposedSeqNoMap.get(id);
                                 proposedSeqNoList.add(proposedNoInQueue);
-                                proposedSeqNoMap.put(messageId, proposedSeqNoList);
+                                proposedSeqNoMap.put(id, proposedSeqNoList);
+                                Log.d("List value-->",proposedSeqNoList.toString());
                                 Log.d(TAG, "Inside UnicastFlag");
-                                if (proposedSeqNoList.size() == 5) {
-                                    Log.d("List-->", proposedSeqNoList.toString());
-                                    for (float f : proposedSeqNoList) {
-                                        if (f > max)
-                                            max = f;
-                                    }
-                                    Log.d("FinalAgreedNo-->", String.valueOf(max));
-                                    MessageObject messageObjectMulticast = new MessageObject(msg, messageId, max, true,false,false);
-                                    for (String s : portNumbers) {
-                                        Socket clientsocket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(s));
+                                    if (proposedSeqNoList.size() == 5) {
+                                        Log.d("List-->", proposedSeqNoList.toString());
+                                        for (float f : proposedSeqNoList) {
+                                            if (f > maxinList)
+                                                maxinList = f;
+                                        }
+                                        Log.d("FinalAgreedNo-->", String.valueOf(maxinList));
+                                        String messageDataAgreed=id+"%"+String.valueOf(maxinList)+"%"+messageValue+"%"+"AgreedMulticast";
+                                        //MessageObject messageObjectMulticast = new MessageObject(msg, messageId, max, true, false, false);
+                                        for (String s : portNumbers) {
+                                            Socket clientsocket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(s));
                                             Log.d(TAG, "Agreed Multicast");
-                                            oos = new ObjectOutputStream(clientsocket.getOutputStream());
+                                            PrintStream ps = new PrintStream
+                                                    (clientsocket.getOutputStream());
+                                            ps.println(messageDataAgreed);
+                                            ps.flush();
+                                            ps.close();
+                                          /*  oos = new ObjectOutputStream(clientsocket.getOutputStream());
                                             oos.writeObject(messageObjectMulticast);
-                                            oos.close();
+                                            oos.close();*/
                                             clientsocket.close();
+                                        }
+                                        // new AgreedMulticast().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, messageObjectMulticast);
                                     }
-                                   // new AgreedMulticast().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, messageObjectMulticast);
-
-                                }
-
                             }
-
-                        } catch (ClassNotFoundException e) {
+                        } catch (Exception e) {
                             e.printStackTrace();
                         }
                     }
@@ -266,6 +307,17 @@ public class GroupMessengerActivity extends Activity {
                 }
 
             }
+
+        }
+        public float getMax(List<Float> maxProposalList)
+        {
+            float max=0.0f;
+            for(float f: maxProposalList)
+            {
+                if(f>max)
+                    max=f;
+            }
+            return max;
         }
         protected void onProgressUpdate(String...strings) {
 
@@ -280,6 +332,7 @@ public class GroupMessengerActivity extends Activity {
             values.put(VALUE_FIELD, strReceived);
             deliverySeqNo=deliverySeqNo+1;
             new GroupMessengerProvider().insert(mUri,values);
+          //  new GroupMessengerProvider(getContentResolver()).testQuery(deliverySeqNo);
 
         }
     }
@@ -296,19 +349,23 @@ public class GroupMessengerActivity extends Activity {
                 messageIdNo=messageIdNo+1;
                 inputMessageMap.put(messageId,messageValue);
                 proposedSeqNoMap.put(messageId,new ArrayList<Float>());
-
                 //As there is Multicast we iterate over all the ports including the one from which the message is sent.
                 for(String s:portNumbers) {
                     Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(s));
                     if (socket.isConnected()) {
-                        MessageObject messageObject=new MessageObject(messageId,messageValue,sender,s,true,false,false);
-                        oos = new ObjectOutputStream(socket.getOutputStream());
+                        String messageData=messageId+"%"+messageValue+"%"+sender+"%"+s+"%"+"basicMultiCast";
+                       /* MessageObject messageObject=new MessageObject(messageId,messageValue,sender,s,true,false,false);
+                        oos = new ObjectOutputStream(socket.getOutputStream());*/
+                        PrintStream ps = new PrintStream
+                                (socket.getOutputStream());
+                        ps.println(messageData);
+                        ps.flush();
+                        ps.close();
                         Log.d(TAG, "Client process started");
-                        oos.writeObject(messageObject);
-                        oos.close();
+                      //  oos.writeObject(messageObject);
+                        //oos.close();
                         socket.close();
                     }
-
                 }
             } catch (UnknownHostException e) {
                 Log.e(TAG, "ClientTask UnknownHostException");
@@ -321,103 +378,7 @@ public class GroupMessengerActivity extends Activity {
         }
     }
 
-
-   /* private class ClientTaskUniTask extends AsyncTask<MessageObject, Void, Void> {
-        // I used the PrintStream code from :http://www.tutorialspoint.com/javaexamples/net_singleuser.htm
-        ObjectOutputStream oos=null;
-        Socket client=null;
-        MessageObject messageObject=null;
-        @Override
-        protected synchronized Void doInBackground(MessageObject... messageObject) {
-            try {
-                this.messageObject=messageObject[0];
-                String messageId = this.messageObject.messageId;
-                String sender = this.messageObject.sender;
-                String message=this.messageObject.messageValue;
-                float proposedNoInQueue=this.messageObject.proposedSeqNo;
-                Socket socket = null;
-                try {
-                    socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(sender));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                if (socket.isConnected()) {
-                    try {
-                        oos = new ObjectOutputStream(socket.getOutputStream());
-                    } catch (IOException e1) {
-                        e1.printStackTrace();
-                    }
-                    //setting unicastflag true and giving proposedSeqNo
-                    MessageObject messageObjectUnicast=new MessageObject(true,messageId,proposedNoInQueue,sender,message);
-                    Log.d(TAG,"Proposed sequence no-->"+ String.valueOf(proposedSeqNo));
-                    Log.d(TAG, "Inside ClientTaskUniTask");
-                    try {
-                        oos.writeObject(messageObjectUnicast);
-                    } catch (IOException e1) {
-                        e1.printStackTrace();
-                    }
-                }
-                try {
-                    oos.close();
-                } catch (IOException e1) {
-                    e1.printStackTrace();
-                }
-                try {
-                    socket.close();
-                } catch (IOException e1) {
-                    e1.printStackTrace();
-                }
-
-                try {
-                    socket.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-
-            }catch(Exception e){
-                e.printStackTrace();
-            }
-
-            return null;
-        }
-    }*/
-
-/*
-    private class AgreedMulticast extends AsyncTask<MessageObject, Void, Void> {
-        // I used the PrintStream code from :http://www.tutorialspoint.com/javaexamples/net_singleuser.htm
-        ObjectOutputStream oos=null;
-        Socket client=null;
-        MessageObject messageObject=null;
-
-        @Override
-        protected synchronized Void doInBackground(MessageObject... messageObject) {
-            try {
-                Socket socket = null;
-                this.messageObject=messageObject[0];
-                for (String s : portNumbers) {
-                    Socket clientsocket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(s));
-                    if (clientsocket.isConnected()) {
-                        Log.d(TAG, "Agreed Multicast");
-                        oos = new ObjectOutputStream(clientsocket.getOutputStream());
-                        oos.writeObject(this.messageObject);
-                    }
-                    clientsocket.close();
-                }
-                try {
-                    oos.close();
-                } catch (IOException e1) {
-                    e1.printStackTrace();
-                }
-            }catch(Exception e){
-                e.printStackTrace();
-            }
-
-            return null;
-        }
-    }*/
-
-
-    public static class MessageObject implements Serializable
+/*    public static class MessageObject implements Serializable
     {
         public String messageValue;
         public String sender;
@@ -462,7 +423,7 @@ public class GroupMessengerActivity extends Activity {
             this.agreedmulticastFlag=agreedmulticastFlag;
         }
 
-    }
+    }*/
 
     public static class HoldBackQueueObject implements Serializable,Comparable
     {
@@ -470,6 +431,7 @@ public class GroupMessengerActivity extends Activity {
         float agreedSeqNo;
         boolean isDeliverable;
         String messageValue;
+        static float max=0.0f;
         HoldBackQueueObject(String messageId,String messageValue,float agreedSeqNo,boolean isDeliverable)
         {
             this.messageValue=messageValue;
@@ -482,6 +444,32 @@ public class GroupMessengerActivity extends Activity {
         public int compareTo(Object another) {
             Float f=((HoldBackQueueObject)another).agreedSeqNo;
             return Float.compare(this.agreedSeqNo,f);
+        }
+
+        public static String toString(Queue holdBackQueue)
+        {
+            String list="[";
+            Iterator iterator=holdBackQueue.iterator();
+            while (iterator.hasNext())
+            {
+                HoldBackQueueObject holdBackQueueObject= (HoldBackQueueObject) iterator.next();
+                list+="{"+String.valueOf(holdBackQueueObject.agreedSeqNo)+","+String.valueOf(holdBackQueueObject.isDeliverable)+","+"}";
+            }
+            return list+"]";
+        }
+        public static float getMax(Queue holdBackQueue)
+        {
+            Iterator iterator=holdBackQueue.iterator();
+
+            while (iterator.hasNext())
+            {
+               HoldBackQueueObject holdBackQueueObject= (HoldBackQueueObject) iterator.next();
+               if(max<holdBackQueueObject.agreedSeqNo)
+               {
+                   max=holdBackQueueObject.agreedSeqNo;
+               }
+            }
+            return max;
         }
     }
 
